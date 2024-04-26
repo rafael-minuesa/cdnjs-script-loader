@@ -1,2 +1,2 @@
 # cdnjs-script-loader
-Allows loading JavaScript libraries from cdnjs
+Allows loading JavaScript libraries on WordPress from cdnjs
