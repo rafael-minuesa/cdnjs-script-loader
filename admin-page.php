@@ -35,12 +35,14 @@ function cdnjs_script_loader_section_text() {
 
 function cdnjs_script_loader_setting_string() {
     $options = get_option('cdnjs_script_loader_settings');
-    echo "<input id='scripts' name='cdnjs_script_loader_settings[scripts]' size='40' type='text' value='{$options['scripts']}' />";
+    $scripts = is_array($options) && isset($options['scripts']) ? $options['scripts'] : '';
+    echo "<input id='scripts' name='cdnjs_script_loader_settings[scripts]' size='40' type='text' value='{$scripts}' />";
 }
 
 function cdnjs_script_loader_setting_versions() {
     $options = get_option('cdnjs_script_loader_settings');
-    echo "<input id='versions' name='cdnjs_script_loader_settings[versions]' size='40' type='text' value='{$options['versions']}' />";
+    $versions = is_array($options) && isset($options['versions']) ? $options['versions'] : '';
+    echo "<input id='versions' name='cdnjs_script_loader_settings[versions]' size='40' type='text' value='{$versions}' />";
     echo '<p>Enter the versions for each script respectively, separated by commas (e.g., 3.4.1, 4.5.2).</p>';
 }
 
