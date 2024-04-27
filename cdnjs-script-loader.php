@@ -1,7 +1,7 @@
 <?php
 /*
 Plugin Name: CDNJS Script Loader
-Plugin URI: http://prowoos.com/
+Plugin URI: https://github.com/rafael-minuesa/
 Description: Allows loading JavaScript libraries from cdnjs
 Version: 1.2
 Author: Rafael Minuesa
