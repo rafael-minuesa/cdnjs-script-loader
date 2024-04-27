@@ -2,8 +2,8 @@
 /*
 Plugin Name: CDNJS Script Loader
 Plugin URI: http://prowoos.com/
-Description: Allows loading JavaScript libraries from CDNJS.
-Version: 1.1
+Description: Allows loading JavaScript libraries from cdnjs
+Version: 1.2
 Author: Rafael Minuesa
 Author URI: http://prowoos.com/
 License: GPL2
