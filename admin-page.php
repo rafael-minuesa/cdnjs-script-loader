@@ -9,7 +9,7 @@ function cdnjs_script_loader_options_page() {
     ?>
     <div class="wrap">
         <h2>CDNJS Script Loader</h2>
-        <p>To check available scripts and their versions, visit <a href="https://cdnjs.com/" target="_blank">cdnjs.com</a>.</p>
+        <h3>To check available scripts and their versions, visit <a href="https://cdnjs.com/" target="_blank">cdnjs.com</a>.</h3>
         <form action="options.php" method="post">
             <?php
             settings_fields('cdnjs_script_loader_options');
