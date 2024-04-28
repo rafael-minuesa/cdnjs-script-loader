@@ -6,6 +6,7 @@ function cdnjs_script_loader_menu() {
 }
 
 function cdnjs_script_loader_options_page() {
+    $options = get_option('cdnjs_script_loader_settings');
     ?>
     <div class="wrap">
         <h2>CDNJS Script Loader</h2>
@@ -16,10 +17,19 @@ function cdnjs_script_loader_options_page() {
             do_settings_sections('cdnjs_script_loader');
             ?>
             <div id="script-fields">
-                <div class="script-field">
-                    <input type="text" name="cdnjs_script_loader_settings[scripts][]" placeholder="Script Name (e.g., jquery)" />
-                    <input type="text" name="cdnjs_script_loader_settings[versions][]" placeholder="Version (e.g., 3.5.1)" />
-                </div>
+                <?php if (!empty($options['scripts']) && is_array($options['scripts'])): ?>
+                    <?php foreach ($options['scripts'] as $index => $script): ?>
+                        <div class="script-field">
+                            <input type="text" name="cdnjs_script_loader_settings[scripts][]" placeholder="Script Name (e.g., jquery)" value="<?php echo esc_attr($script); ?>" />
+                            <input type="text" name="cdnjs_script_loader_settings[versions][]" placeholder="Version (e.g., 3.5.1)" value="<?php echo esc_attr($options['versions'][$index]); ?>" />
+                        </div>
+                    <?php endforeach; ?>
+                <?php else: ?>
+                    <div class="script-field">
+                        <input type="text" name="cdnjs_script_loader_settings[scripts][]" placeholder="Script Name (e.g., jquery)" />
+                        <input type="text" name="cdnjs_script_loader_settings[versions][]" placeholder="Version (e.g., 3.5.1)" />
+                    </div>
+                <?php endif; ?>
             </div>
             <button type="button" id="add-script-field">Add More</button>
             <?php submit_button(); ?>
@@ -49,7 +59,11 @@ function cdnjs_script_loader_sanitize($input) {
     return $new_input;
 }
 
-function cdnjs_script_loader_admin_styles() {
-    wp_enqueue_style('cdnjs-admin-style', plugin_dir_url(__FILE__) . 'admin-custom.css');
+function cdnjs_script_loader_admin_scripts($hook) {
+    if ($hook != 'settings_page_cdnjs-script-loader') {
+        return;
+    }
+    wp_enqueue_script('cdnjs-admin-js', plugin_dir_url(__FILE__) . 'admin-scripts.js', array(), null, true);
 }
-add_action('admin_enqueue_scripts', 'cdnjs_script_loader_admin_styles');
+
+add_action('admin_enqueue_scripts', 'cdnjs_script_loader_admin_scripts');
