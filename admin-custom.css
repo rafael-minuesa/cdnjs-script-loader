@@ -1,0 +1,12 @@
+/* admin-custom.css */
+.script-field {
+    display: flex;
+    margin-bottom: 10px;
+}
+.script-field input[type="text"]:first-child {
+    flex: 0 0 55%;
+    margin-right: 2%;
+}
+.script-field input[type="text"]:last-child {
+    flex: 0 0 15%;
+}
