@@ -35,7 +35,6 @@ function cdnjs_script_loader_admin_init() {
 }
 
 function cdnjs_script_loader_sanitize($input) {
-    // Sanitize each input field
     $new_input = array();
     if (isset($input['scripts']) && is_array($input['scripts'])) {
         foreach ($input['scripts'] as $key => $script) {
@@ -50,7 +49,7 @@ function cdnjs_script_loader_sanitize($input) {
     return $new_input;
 }
 
-function cdnjs_script_loader_admin_scripts() {
-    wp_enqueue_script('cdnjs-admin-js', plugin_dir_url(__FILE__) . 'admin-scripts.js', array('jquery'), null, true);
+function cdnjs_script_loader_admin_styles() {
+    wp_enqueue_style('cdnjs-admin-style', plugin_dir_url(__FILE__) . 'admin-custom.css');
 }
-add_action('admin_enqueue_scripts', 'cdnjs_script_loader_admin_scripts');
+add_action('admin_enqueue_scripts', 'cdnjs_script_loader_admin_styles');
