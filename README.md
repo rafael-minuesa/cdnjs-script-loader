@@ -124,7 +124,7 @@ cdnScript.onerror = function() {
 
 ### Performance Tracking
 
-Uses the **Performance Observer API** to track:
+Uses the browser **Resource Timing API** to track:
 - Resource load duration
 - Transfer size
 - Success/failure rates
@@ -175,7 +175,7 @@ Yes, when using SRI hashes (which this plugin does automatically). SRI ensures t
 - ✅ Dependency preservation when replacing scripts
 - ✅ Custom filename support for non-standard libraries
 - ✅ Failure tracking and analytics
-- ✅ Real-time performance metrics using Performance Observer API
+- ✅ Real-time performance metrics using the Resource Timing API
 
 ### 1.2 - Previous Release
 
