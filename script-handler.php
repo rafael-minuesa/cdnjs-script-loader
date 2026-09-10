@@ -70,7 +70,8 @@ function cdnjs_replace_scripts() {
  * Get library data from CDNJS API with caching
  */
 function cdnjs_get_library_data($library, $version) {
-    $transient_key = 'cdnjs_lib_' . md5($library . $version);
+    $requested_filename = cdnjs_get_configured_filename($library);
+    $transient_key = 'cdnjs_lib_' . md5($library . '|' . $version . '|' . $requested_filename);
     $cached_data = get_transient($transient_key);
 
     if ($cached_data !== false) {
@@ -78,58 +79,118 @@ function cdnjs_get_library_data($library, $version) {
     }
 
     // Try to fetch from CDNJS API
-    $api_url = 'https://api.cdnjs.com/libraries/' . urlencode($library) . '/' . urlencode($version);
+    $api_url = 'https://api.cdnjs.com/libraries/' . rawurlencode($library) . '/' . rawurlencode($version);
     $response = wp_remote_get($api_url, array('timeout' => 5));
 
-    if (is_wp_error($response)) {
-        // Fallback to manual URL construction
-        return cdnjs_construct_manual_url($library, $version);
+    if (!is_wp_error($response) && 200 === wp_remote_retrieve_response_code($response)) {
+        $body = wp_remote_retrieve_body($response);
+        $data = json_decode($body, true);
+        $filename = $requested_filename ?: cdnjs_select_library_filename($library, isset($data['files']) ? $data['files'] : array());
+
+        if (!empty($filename)) {
+            $sri_hashes = isset($data['sri']) && is_array($data['sri']) ? $data['sri'] : array();
+            $sri_hash = isset($sri_hashes[$filename]) ? $sri_hashes[$filename] : '';
+
+            $library_data = cdnjs_build_library_data($library, $version, $filename, $sri_hash);
+
+            // Cache for 7 days.
+            set_transient($transient_key, $library_data, 7 * DAY_IN_SECONDS);
+
+            return $library_data;
+        }
     }
 
-    $body = wp_remote_retrieve_body($response);
-    $data = json_decode($body, true);
+    // Use a best-effort URL during an API failure, but retry the API sooner so
+    // a temporary outage does not leave the library without SRI for a week.
+    $library_data = cdnjs_construct_manual_url($library, $version);
+    set_transient($transient_key, $library_data, HOUR_IN_SECONDS);
 
-    if (!empty($data['sri']) && !empty($data['url'])) {
-        $library_data = array(
-            'url' => $data['url'],
-            'sri' => $data['sri'],
-            'filename' => basename($data['url'])
-        );
-
-        // Cache for 7 days
-        set_transient($transient_key, $library_data, 7 * DAY_IN_SECONDS);
-
-        return $library_data;
-    }
-
-    return cdnjs_construct_manual_url($library, $version);
+    return $library_data;
 }
 
 /**
- * Manually construct CDNJS URL when API is unavailable
+ * Get the configured asset filename for a library.
+ *
+ * Supports both filename arrays keyed by library and the numeric format used
+ * by newly added rows in version 2.0.0.
  */
-function cdnjs_construct_manual_url($library, $version) {
-    // Common patterns for library filenames
-    $patterns = array(
-        $library . '.min.js',
-        $library . '.js',
-        'index.min.js',
-        strtolower($library) . '.min.js'
-    );
+function cdnjs_get_configured_filename($library) {
+    $options = get_option('cdnjs_script_loader_settings', array());
 
-    // Use stored custom filename if available
-    $options = get_option('cdnjs_script_loader_settings');
     if (!empty($options['filenames'][$library])) {
-        $filename = $options['filenames'][$library];
-    } else {
-        $filename = $patterns[0]; // Default to first pattern
+        return trim($options['filenames'][$library], '/');
     }
 
-    return array(
-        'url' => 'https://cdnjs.cloudflare.com/ajax/libs/' . $library . '/' . $version . '/' . $filename,
-        'sri' => '', // No SRI hash available without API
-        'filename' => $filename
+    if (!empty($options['scripts']) && is_array($options['scripts'])) {
+        $index = array_search($library, $options['scripts'], true);
+
+        if (false !== $index && !empty($options['filenames'][$index])) {
+            return trim($options['filenames'][$index], '/');
+        }
+    }
+
+    return '';
+}
+
+/**
+ * Select the most likely JavaScript entry point from a CDNJS asset list.
+ */
+function cdnjs_select_library_filename($library, $files) {
+    if (!is_array($files)) {
+        return '';
+    }
+
+    $files = array_values(array_filter($files, 'is_string'));
+    $preferred_files = array(
+        $library . '.min.js',
+        strtolower($library) . '.min.js',
+        $library . '.js',
+        strtolower($library) . '.js',
+        'index.min.js',
+        'index.js',
     );
+
+    foreach ($preferred_files as $preferred_file) {
+        if (in_array($preferred_file, $files, true)) {
+            return $preferred_file;
+        }
+    }
+
+    foreach (array('/\.min\.js$/i', '/\.js$/i') as $pattern) {
+        foreach ($files as $file) {
+            if (preg_match($pattern, $file)) {
+                return $file;
+            }
+        }
+    }
+
+    return '';
+}
+
+/**
+ * Build the public CDN URL and metadata for a selected asset.
+ */
+function cdnjs_build_library_data($library, $version, $filename, $sri_hash = '') {
+    $encoded_filename = implode('/', array_map('rawurlencode', explode('/', trim($filename, '/'))));
+
+    return array(
+        'url' => 'https://cdnjs.cloudflare.com/ajax/libs/' . rawurlencode($library) . '/' . rawurlencode($version) . '/' . $encoded_filename,
+        'sri' => $sri_hash,
+        'filename' => $filename,
+    );
+}
+
+/**
+ * Manually construct CDNJS URL when API is unavailable.
+ */
+function cdnjs_construct_manual_url($library, $version) {
+    $filename = cdnjs_get_configured_filename($library);
+
+    if (empty($filename)) {
+        $filename = $library . '.min.js';
+    }
+
+    return cdnjs_build_library_data($library, $version, $filename);
 }
 
 /**
