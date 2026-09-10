@@ -6,11 +6,15 @@ function cdnjs_script_loader_menu() {
 }
 
 function cdnjs_script_loader_options_page() {
-    $options = get_option('cdnjs_script_loader_settings');
+    $options = get_option('cdnjs_script_loader_settings', array());
     $performance = get_option('cdnjs_performance', array());
     $failures = get_option('cdnjs_failures', array());
 
-    $active_tab = isset($_GET['tab']) ? $_GET['tab'] : 'libraries';
+    $active_tab = isset($_GET['tab']) ? sanitize_key(wp_unslash($_GET['tab'])) : 'libraries';
+
+    if (!in_array($active_tab, array('libraries', 'fallback', 'performance'), true)) {
+        $active_tab = 'libraries';
+    }
     ?>
     <div class="wrap">
         <h1>CDNJS Script Loader</h1>
@@ -32,6 +36,7 @@ function cdnjs_script_loader_options_page() {
                     settings_fields('cdnjs_script_loader_options');
                     do_settings_sections('cdnjs_script_loader');
                     ?>
+                    <input type="hidden" name="cdnjs_script_loader_settings[settings_section]" value="libraries" />
 
                     <table class="wp-list-table widefat fixed striped">
                         <thead>
@@ -44,16 +49,23 @@ function cdnjs_script_loader_options_page() {
                         </thead>
                         <tbody id="script-fields">
                             <?php if (!empty($options['scripts']) && is_array($options['scripts'])): ?>
-                                <?php foreach ($options['scripts'] as $index => $script): ?>
+                                <?php foreach ($options['scripts'] as $index => $script):
+                                    $version = isset($options['versions'][$index]) ? $options['versions'][$index] : '';
+                                    $filename = isset($options['filenames'][$script]) ? $options['filenames'][$script] : '';
+
+                                    if (empty($filename) && isset($options['filenames'][$index])) {
+                                        $filename = $options['filenames'][$index];
+                                    }
+                                ?>
                                     <tr class="script-field">
                                         <td>
                                             <input type="text" class="regular-text" name="cdnjs_script_loader_settings[scripts][]" placeholder="e.g., jquery" value="<?php echo esc_attr($script); ?>" required />
                                         </td>
                                         <td>
-                                            <input type="text" class="regular-text" name="cdnjs_script_loader_settings[versions][]" placeholder="e.g., 3.7.1" value="<?php echo esc_attr($options['versions'][$index]); ?>" required />
+                                            <input type="text" class="regular-text" name="cdnjs_script_loader_settings[versions][]" placeholder="e.g., 3.7.1" value="<?php echo esc_attr($version); ?>" required />
                                         </td>
                                         <td>
-                                            <input type="text" class="regular-text" name="cdnjs_script_loader_settings[filenames][<?php echo esc_attr($script); ?>]" placeholder="e.g., jquery.min.js" value="<?php echo isset($options['filenames'][$script]) ? esc_attr($options['filenames'][$script]) : ''; ?>" />
+                                            <input type="text" class="regular-text" name="cdnjs_script_loader_settings[filenames][]" placeholder="e.g., jquery.min.js" value="<?php echo esc_attr($filename); ?>" />
                                         </td>
                                         <td>
                                             <button type="button" class="button remove-script-field">Remove</button>
@@ -94,6 +106,7 @@ function cdnjs_script_loader_options_page() {
 
                 <form action="options.php" method="post" enctype="multipart/form-data">
                     <?php settings_fields('cdnjs_script_loader_options'); ?>
+                    <input type="hidden" name="cdnjs_script_loader_settings[settings_section]" value="fallback" />
 
                     <table class="form-table">
                         <tr>
@@ -261,31 +274,88 @@ function cdnjs_script_loader_admin_init() {
 }
 
 function cdnjs_script_loader_sanitize($input) {
-    $new_input = array();
+    $existing = get_option('cdnjs_script_loader_settings', array());
+    $new_input = is_array($existing) ? $existing : array();
+    $section = isset($input['settings_section']) ? sanitize_key($input['settings_section']) : '';
 
-    if (isset($input['scripts']) && is_array($input['scripts'])) {
-        foreach ($input['scripts'] as $key => $script) {
-            $new_input['scripts'][$key] = sanitize_text_field($script);
-        }
+    // Retain backwards compatibility with submissions that predate the
+    // settings_section field.
+    if (empty($section)) {
+        $section = isset($input['scripts']) ? 'libraries' : 'fallback';
     }
 
-    if (isset($input['versions']) && is_array($input['versions'])) {
-        foreach ($input['versions'] as $key => $version) {
-            $new_input['versions'][$key] = sanitize_text_field($version);
-        }
+    if ('fallback' === $section) {
+        $new_input['enable_fallback'] = empty($input['enable_fallback']) ? 0 : 1;
+
+        return $new_input;
     }
 
-    if (isset($input['filenames']) && is_array($input['filenames'])) {
-        foreach ($input['filenames'] as $key => $filename) {
-            $new_input['filenames'][$key] = sanitize_text_field($filename);
-        }
+    if ('libraries' !== $section) {
+        return $new_input;
     }
 
-    if (isset($input['enable_fallback'])) {
-        $new_input['enable_fallback'] = 1;
+    $scripts = isset($input['scripts']) && is_array($input['scripts']) ? $input['scripts'] : array();
+    $versions = isset($input['versions']) && is_array($input['versions']) ? $input['versions'] : array();
+    $filenames = isset($input['filenames']) && is_array($input['filenames']) ? $input['filenames'] : array();
+
+    $new_input['scripts'] = array();
+    $new_input['versions'] = array();
+    $new_input['filenames'] = array();
+
+    foreach ($scripts as $index => $script) {
+        $script = cdnjs_sanitize_script_name($script);
+        $version = isset($versions[$index]) ? sanitize_text_field($versions[$index]) : '';
+
+        if (empty($script) || empty($version)) {
+            continue;
+        }
+
+        $new_input['scripts'][] = $script;
+        $new_input['versions'][] = $version;
+
+        if (!empty($filenames[$index])) {
+            $filename = cdnjs_sanitize_asset_filename($filenames[$index]);
+
+            if (!empty($filename)) {
+                $new_input['filenames'][$script] = $filename;
+            }
+        }
     }
 
     return $new_input;
+}
+
+/**
+ * Sanitize a WordPress script handle/CDNJS library name for use as a local
+ * fallback filename.
+ */
+function cdnjs_sanitize_script_name($script_name) {
+    $script_name = sanitize_text_field($script_name);
+
+    return preg_replace('/[^A-Za-z0-9@._-]/', '', $script_name);
+}
+
+/**
+ * Sanitize a CDNJS asset path while retaining valid nested directories.
+ */
+function cdnjs_sanitize_asset_filename($filename) {
+    $filename = str_replace('\\', '/', sanitize_text_field($filename));
+    $segments = explode('/', trim($filename, '/'));
+    $safe_segments = array();
+
+    foreach ($segments as $segment) {
+        if (empty($segment) || '.' === $segment || '..' === $segment) {
+            continue;
+        }
+
+        $segment = sanitize_file_name($segment);
+
+        if (!empty($segment)) {
+            $safe_segments[] = $segment;
+        }
+    }
+
+    return implode('/', $safe_segments);
 }
 
 function cdnjs_script_loader_admin_scripts($hook) {
@@ -316,11 +386,24 @@ function cdnjs_handle_fallback_upload() {
         return;
     }
 
-    $script_name = sanitize_text_field($_POST['fallback_script_name']);
+    $script_name = cdnjs_sanitize_script_name(wp_unslash($_POST['fallback_script_name']));
     $file = $_FILES['fallback_file'];
 
+    $options = get_option('cdnjs_script_loader_settings', array());
+    $configured_scripts = !empty($options['scripts']) && is_array($options['scripts']) ? array_map('cdnjs_sanitize_script_name', $options['scripts']) : array();
+
+    if (empty($script_name) || !in_array($script_name, $configured_scripts, true)) {
+        add_settings_error('cdnjs_messages', 'cdnjs_message', 'Select a library that is configured on the Libraries tab.', 'error');
+        return;
+    }
+
+    if (!isset($file['error']) || UPLOAD_ERR_OK !== $file['error']) {
+        add_settings_error('cdnjs_messages', 'cdnjs_message', 'The fallback file could not be uploaded.', 'error');
+        return;
+    }
+
     // Validate file type
-    $file_ext = pathinfo($file['name'], PATHINFO_EXTENSION);
+    $file_ext = strtolower(pathinfo($file['name'], PATHINFO_EXTENSION));
     if ($file_ext !== 'js') {
         add_settings_error('cdnjs_messages', 'cdnjs_message', 'Only JavaScript files (.js) are allowed.', 'error');
         return;
@@ -330,8 +413,9 @@ function cdnjs_handle_fallback_upload() {
     $upload_dir = wp_upload_dir();
     $fallback_dir = $upload_dir['basedir'] . '/cdnjs-fallbacks/';
 
-    if (!file_exists($fallback_dir)) {
-        wp_mkdir_p($fallback_dir);
+    if (!file_exists($fallback_dir) && !wp_mkdir_p($fallback_dir)) {
+        add_settings_error('cdnjs_messages', 'cdnjs_message', 'Failed to create the fallback directory.', 'error');
+        return;
     }
 
     // Move uploaded file
@@ -354,7 +438,11 @@ function cdnjs_handle_fallback_delete() {
         return;
     }
 
-    $script_name = sanitize_text_field($_GET['delete']);
+    $script_name = cdnjs_sanitize_script_name(wp_unslash($_GET['delete']));
+
+    if (empty($script_name)) {
+        wp_die('Invalid fallback filename');
+    }
 
     if (!wp_verify_nonce($_GET['_wpnonce'], 'delete_fallback_' . $script_name)) {
         wp_die('Invalid nonce');
@@ -367,13 +455,20 @@ function cdnjs_handle_fallback_delete() {
     $upload_dir = wp_upload_dir();
     $file_path = $upload_dir['basedir'] . '/cdnjs-fallbacks/' . $script_name . '.min.js';
 
-    if (file_exists($file_path) && unlink($file_path)) {
+    $file_deleted = false;
+
+    if (file_exists($file_path)) {
+        wp_delete_file($file_path);
+        $file_deleted = !file_exists($file_path);
+    }
+
+    if ($file_deleted) {
         add_settings_error('cdnjs_messages', 'cdnjs_message', 'Fallback file deleted successfully.', 'success');
     } else {
         add_settings_error('cdnjs_messages', 'cdnjs_message', 'Failed to delete fallback file.', 'error');
     }
 
-    wp_redirect(admin_url('options-general.php?page=cdnjs-script-loader&tab=fallback'));
+    wp_safe_redirect(admin_url('options-general.php?page=cdnjs-script-loader&tab=fallback'));
     exit;
 }
 
