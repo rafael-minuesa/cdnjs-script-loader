@@ -313,8 +313,18 @@ function cdnjs_script_loader_sanitize($input) {
         $new_input['scripts'][] = $script;
         $new_input['versions'][] = $version;
 
+        $raw_filename = '';
+
         if (!empty($filenames[$index])) {
-            $filename = cdnjs_sanitize_asset_filename($filenames[$index]);
+            $raw_filename = $filenames[$index];
+        } elseif (!empty($filenames[$script])) {
+            // update_option() can sanitize a new option twice: once before it
+            // delegates to add_option(), then again with this keyed format.
+            $raw_filename = $filenames[$script];
+        }
+
+        if (!empty($raw_filename)) {
+            $filename = cdnjs_sanitize_asset_filename($raw_filename);
 
             if (!empty($filename)) {
                 $new_input['filenames'][$script] = $filename;
