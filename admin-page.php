@@ -354,15 +354,13 @@ function cdnjs_sanitize_asset_filename($filename) {
     $safe_segments = array();
 
     foreach ($segments as $segment) {
-        if (empty($segment) || '.' === $segment || '..' === $segment) {
+        $segment = preg_replace('/[^A-Za-z0-9._@+-]/', '', $segment);
+
+        if ('' === $segment || '.' === $segment || '..' === $segment) {
             continue;
         }
 
-        $segment = sanitize_file_name($segment);
-
-        if (!empty($segment)) {
-            $safe_segments[] = $segment;
-        }
+        $safe_segments[] = $segment;
     }
 
     return implode('/', $safe_segments);
