@@ -64,7 +64,8 @@ function cdnjs_replace_scripts() {
         if (!empty($sri_hash)) {
             add_filter('script_loader_tag', function($tag, $handle) use ($script_handle, $sri_hash) {
                 if ($handle === $script_handle) {
-                    $tag = str_replace('<script ', '<script integrity="' . esc_attr($sri_hash) . '" crossorigin="anonymous" ', $tag);
+                    $attributes = 'integrity="' . esc_attr($sri_hash) . '" crossorigin="anonymous"';
+                    $tag = cdnjs_add_attributes_to_script_tag($tag, $script_handle, $attributes);
                 }
                 return $tag;
             }, 10, 2);
@@ -79,6 +80,28 @@ function cdnjs_replace_scripts() {
         // Track performance
         cdnjs_track_script_load($script_handle, $cdn_url, $script);
     }
+}
+
+/**
+ * Add attributes only to the external tag for a registered script handle.
+ *
+ * WordPress may pass translations and before/after inline blocks alongside the
+ * external tag through script_loader_tag, so a broad string replacement can
+ * accidentally decorate an inline script instead.
+ */
+function cdnjs_add_attributes_to_script_tag($tag, $handle, $attributes) {
+    $tag_id = $handle . '-js';
+    $pattern = "/<script\\b(?=[^>]*\\bid=([\"'])" . preg_quote($tag_id, '/') . "\\1)[^>]*>/i";
+    $updated_tag = preg_replace_callback(
+        $pattern,
+        function($matches) use ($attributes) {
+            return substr($matches[0], 0, -1) . ' ' . $attributes . '>';
+        },
+        $tag,
+        1
+    );
+
+    return null === $updated_tag ? $tag : $updated_tag;
 }
 
 /**
@@ -176,13 +199,16 @@ function cdnjs_add_fallback($script_handle, $library_data, $library = '') {
                 return $tag;
             }
 
-            // Reuse the parser-inserted script element so dependent scripts do
-            // not run ahead of a dynamically appended fallback. The integrity
-            // attribute belongs to the CDN asset and must not be reused locally.
-            $onerror = 'this.onerror=null;this.removeAttribute("integrity");this.src=' . wp_json_encode($local_url) . ';'
-                . 'if(navigator.sendBeacon){navigator.sendBeacon(' . wp_json_encode($failure_url) . ');}';
+            // document.write() creates a new parser-inserted script, preserving
+            // execution order for scripts that depend on this library.
+            $fallback_markup = '<script src="' . esc_url($local_url) . '"></script>';
+            $json_flags = JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT;
+            $onerror = 'this.onerror=null;'
+                . 'if(navigator.sendBeacon){navigator.sendBeacon(' . wp_json_encode($failure_url, $json_flags) . ');}'
+                . 'document.write(' . wp_json_encode($fallback_markup, $json_flags) . ');';
+            $attributes = 'onerror="' . esc_attr($onerror) . '"';
 
-            return str_replace('<script ', '<script onerror="' . esc_attr($onerror) . '" ', $tag);
+            return cdnjs_add_attributes_to_script_tag($tag, $script_handle, $attributes);
         }, 10, 2);
     }
 }
