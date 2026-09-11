@@ -3,7 +3,7 @@
  * Plugin Name: CDNJS Script Loader
  * Plugin URI: https://github.com/rafael-minuesa/cdnjs-script-loader
  * Description: Intelligent CDN management for WordPress - Load JavaScript libraries from CDNJS with automatic fallback and performance monitoring
- * Version: 2.0.0
+ * Version: 2.1.0
  * Author: Rafael Minuesa
  * Author URI: http://prowoos.com/
  * License: GPL-2.0+
@@ -12,10 +12,10 @@
  * Domain Path: /languages
  * Requires at least: 5.0
  * Requires PHP: 7.4
- * Tested up to: 6.4
+ * Tested up to: 7.1
  *
  * @package CDNJS_Script_Loader
- * @version 2.0.0
+ * @version 2.1.0
  */
 
 // If this file is called directly, abort.
@@ -26,7 +26,7 @@ if (!defined('WPINC')) {
 /**
  * Current plugin version.
  */
-define('CDNJS_SCRIPT_LOADER_VERSION', '2.0.0');
+define('CDNJS_SCRIPT_LOADER_VERSION', '2.1.0');
 
 /**
  * Plugin base path
