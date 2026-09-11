@@ -85,7 +85,9 @@ function cdnjs_get_library_data($library, $version) {
     if (!is_wp_error($response) && 200 === wp_remote_retrieve_response_code($response)) {
         $body = wp_remote_retrieve_body($response);
         $data = json_decode($body, true);
-        $filename = $requested_filename ?: cdnjs_select_library_filename($library, isset($data['files']) ? $data['files'] : array());
+        $files = isset($data['files']) && is_array($data['files']) ? $data['files'] : array();
+        $default_filename = $requested_filename ? '' : cdnjs_get_library_default_filename($library);
+        $filename = $requested_filename ?: cdnjs_select_library_filename($library, $files, $default_filename);
 
         if (!empty($filename)) {
             $sri_hashes = isset($data['sri']) && is_array($data['sri']) ? $data['sri'] : array();
@@ -106,6 +108,26 @@ function cdnjs_get_library_data($library, $version) {
     set_transient($transient_key, $library_data, HOUR_IN_SECONDS);
 
     return $library_data;
+}
+
+/**
+ * Get the entry-point filename published in a library's CDNJS metadata.
+ */
+function cdnjs_get_library_default_filename($library) {
+    $api_url = add_query_arg(
+        'fields',
+        'filename',
+        'https://api.cdnjs.com/libraries/' . rawurlencode($library)
+    );
+    $response = wp_remote_get($api_url, array('timeout' => 5));
+
+    if (is_wp_error($response) || 200 !== wp_remote_retrieve_response_code($response)) {
+        return '';
+    }
+
+    $data = json_decode(wp_remote_retrieve_body($response), true);
+
+    return isset($data['filename']) && is_string($data['filename']) ? trim($data['filename'], '/') : '';
 }
 
 /**
@@ -135,12 +157,17 @@ function cdnjs_get_configured_filename($library) {
 /**
  * Select the most likely JavaScript entry point from a CDNJS asset list.
  */
-function cdnjs_select_library_filename($library, $files) {
+function cdnjs_select_library_filename($library, $files, $default_filename = '') {
     if (!is_array($files)) {
         return '';
     }
 
     $files = array_values(array_filter($files, 'is_string'));
+
+    if (!empty($default_filename) && in_array($default_filename, $files, true)) {
+        return $default_filename;
+    }
+
     $preferred_files = array(
         $library . '.min.js',
         strtolower($library) . '.min.js',
