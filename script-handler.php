@@ -270,15 +270,13 @@ add_action('wp_ajax_cdnjs_track_failure', 'cdnjs_handle_failure_tracking');
 
 function cdnjs_handle_failure_tracking() {
     if (!isset($_SERVER['REQUEST_METHOD']) || 'POST' !== $_SERVER['REQUEST_METHOD']) {
-        status_header(405);
-        wp_die();
+        wp_die('', '', array('response' => 405));
     }
 
     $script = isset($_GET['script']) ? sanitize_text_field(wp_unslash($_GET['script'])) : '';
 
     if (empty($script) || !cdnjs_is_configured_script($script)) {
-        status_header(400);
-        wp_die();
+        wp_die('', '', array('response' => 400));
     }
 
     $failures = get_option('cdnjs_failures', array());
@@ -308,8 +306,7 @@ add_action('wp_ajax_cdnjs_track_performance', 'cdnjs_handle_performance_tracking
 
 function cdnjs_handle_performance_tracking() {
     if (!isset($_SERVER['REQUEST_METHOD']) || 'POST' !== $_SERVER['REQUEST_METHOD']) {
-        status_header(405);
-        wp_die();
+        wp_die('', '', array('response' => 405));
     }
 
     $raw_data = file_get_contents('php://input');
@@ -318,8 +315,7 @@ function cdnjs_handle_performance_tracking() {
     $duration = isset($data['duration']) && is_numeric($data['duration']) ? (float) $data['duration'] : -1;
 
     if (empty($script) || !cdnjs_is_configured_script($script) || $duration < 0 || $duration > 600000) {
-        status_header(400);
-        wp_die();
+        wp_die('', '', array('response' => 400));
     }
 
     $performance = get_option('cdnjs_performance', array());
