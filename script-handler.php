@@ -24,10 +24,24 @@ function cdnjs_replace_scripts() {
             continue;
         }
 
-        // Get the registered script object to preserve dependencies
+        // WordPress registers `jquery` as a dependency-only alias. Replace the
+        // actual source handle so jQuery Core is not loaded alongside the CDN
+        // copy and the alias can continue to load jQuery Migrate as intended.
         global $wp_scripts;
-        $original_script = isset($wp_scripts->registered[$script]) ? $wp_scripts->registered[$script] : null;
-        $dependencies = $original_script ? $original_script->deps : array();
+        $script_handle = $script;
+
+        if (
+            'jquery' === $script
+            && isset($wp_scripts->registered['jquery'])
+            && empty($wp_scripts->registered['jquery']->src)
+            && isset($wp_scripts->registered['jquery-core'])
+        ) {
+            $script_handle = 'jquery-core';
+        }
+
+        // Update an existing registration in place so its dependencies,
+        // placement, inline data, translations, and loading strategy survive.
+        $original_script = isset($wp_scripts->registered[$script_handle]) ? $wp_scripts->registered[$script_handle] : null;
 
         // Get library details from CDNJS API or use stored data
         $library_data = cdnjs_get_library_data($script, $version);
@@ -39,31 +53,55 @@ function cdnjs_replace_scripts() {
         $cdn_url = $library_data['url'];
         $sri_hash = $library_data['sri'];
 
-        // Deregister the original script
-        wp_deregister_script($script);
-
-        // Register with CDN URL, preserving dependencies
-        wp_register_script($script, $cdn_url, $dependencies, $version, true);
+        if ($original_script) {
+            $original_script->src = $cdn_url;
+            $original_script->ver = $version;
+        } else {
+            wp_register_script($script_handle, $cdn_url, array(), $version, true);
+        }
 
         // Add SRI integrity attribute for security
         if (!empty($sri_hash)) {
-            add_filter('script_loader_tag', function($tag, $handle) use ($script, $sri_hash) {
-                if ($handle === $script) {
-                    $tag = str_replace('<script ', '<script integrity="' . esc_attr($sri_hash) . '" crossorigin="anonymous" ', $tag);
+            add_filter('script_loader_tag', function($tag, $handle) use ($script_handle, $sri_hash) {
+                if ($handle === $script_handle) {
+                    $attributes = 'integrity="' . esc_attr($sri_hash) . '" crossorigin="anonymous"';
+                    $tag = cdnjs_add_attributes_to_script_tag($tag, $script_handle, $attributes);
                 }
                 return $tag;
             }, 10, 2);
         }
 
-        // Add fallback mechanism
-        cdnjs_add_fallback($script, $library_data);
-
         // Enqueue the script
         wp_enqueue_script($script);
 
+        // Add fallback mechanism
+        cdnjs_add_fallback($script_handle, $library_data, $script);
+
         // Track performance
-        cdnjs_track_script_load($script, $cdn_url);
+        cdnjs_track_script_load($script_handle, $cdn_url, $script);
     }
+}
+
+/**
+ * Add attributes only to the external tag for a registered script handle.
+ *
+ * WordPress may pass translations and before/after inline blocks alongside the
+ * external tag through script_loader_tag, so a broad string replacement can
+ * accidentally decorate an inline script instead.
+ */
+function cdnjs_add_attributes_to_script_tag($tag, $handle, $attributes) {
+    $tag_id = $handle . '-js';
+    $pattern = "/<script\\b(?=[^>]*\\bid=([\"'])" . preg_quote($tag_id, '/') . "\\1)[^>]*>/i";
+    $updated_tag = preg_replace_callback(
+        $pattern,
+        function($matches) use ($attributes) {
+            return substr($matches[0], 0, -1) . ' ' . $attributes . '>';
+        },
+        $tag,
+        1
+    );
+
+    return null === $updated_tag ? $tag : $updated_tag;
 }
 
 /**
@@ -251,77 +289,77 @@ function cdnjs_construct_manual_url($library, $version) {
 /**
  * Add JavaScript fallback mechanism for CDN failure
  */
-function cdnjs_add_fallback($script, $library_data) {
+function cdnjs_add_fallback($script_handle, $library_data, $library = '') {
     $options = get_option('cdnjs_script_loader_settings');
+    $library = $library ?: $script_handle;
 
     // Check if local fallback is enabled and exists
     if (empty($options['enable_fallback'])) {
         return;
     }
 
-    $local_path = cdnjs_get_local_fallback_path($script);
+    $local_path = cdnjs_get_local_fallback_path($library);
 
     if (file_exists($local_path)) {
-        $local_url = cdnjs_get_local_fallback_url($script);
+        $local_url = cdnjs_get_local_fallback_url($library);
+        $failure_url = add_query_arg(
+            array(
+                'action' => 'cdnjs_track_failure',
+                'script' => $library,
+            ),
+            admin_url('admin-ajax.php')
+        );
 
-        // Add inline script to check if CDN loaded, fallback to local if not
-        $fallback_script = "
-        (function() {
-            var cdnScript = document.querySelector('script[src*=\"{$script}\"]');
-            if (cdnScript) {
-                cdnScript.onerror = function() {
-                    console.warn('CDN failed for {$script}, loading local fallback');
-                    var fallback = document.createElement('script');
-                    fallback.src = '{$local_url}';
-                    document.head.appendChild(fallback);
-
-                    // Track the failure
-                    if (navigator.sendBeacon) {
-                        navigator.sendBeacon('" . admin_url('admin-ajax.php') . "?action=cdnjs_track_failure&script={$script}');
-                    }
-                };
+        add_filter('script_loader_tag', function($tag, $handle) use ($script_handle, $local_url, $failure_url) {
+            if ($handle !== $script_handle) {
+                return $tag;
             }
-        })();
-        ";
 
-        wp_add_inline_script($script, $fallback_script, 'after');
+            // document.write() creates a new parser-inserted script, preserving
+            // execution order for scripts that depend on this library.
+            $fallback_markup = '<script src="' . esc_url($local_url) . '"></script>';
+            $json_flags = JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT;
+            $onerror = 'this.onerror=null;'
+                . 'if(navigator.sendBeacon){navigator.sendBeacon(' . wp_json_encode($failure_url, $json_flags) . ');}'
+                . 'document.write(' . wp_json_encode($fallback_markup, $json_flags) . ');';
+            $attributes = 'onerror="' . esc_attr($onerror) . '"';
+
+            return cdnjs_add_attributes_to_script_tag($tag, $script_handle, $attributes);
+        }, 10, 2);
     }
 }
 
 /**
  * Track script load performance
  */
-function cdnjs_track_script_load($script, $url) {
-    // Add performance monitoring script
-    $monitoring_script = "
-    (function() {
-        if (window.PerformanceObserver) {
-            var observer = new PerformanceObserver(function(list) {
-                var entries = list.getEntries();
-                entries.forEach(function(entry) {
-                    if (entry.name.indexOf('{$script}') !== -1) {
-                        var data = {
-                            script: '{$script}',
-                            duration: entry.duration,
-                            transferSize: entry.transferSize || 0,
-                            timestamp: Date.now()
-                        };
+function cdnjs_track_script_load($script_handle, $url, $library = '') {
+    $library = $library ?: $script_handle;
+    $config = wp_json_encode(
+        array(
+            'elementId' => $script_handle . '-js',
+            'endpoint' => add_query_arg('action', 'cdnjs_track_performance', admin_url('admin-ajax.php')),
+            'script' => $library,
+            'url' => $url,
+        ),
+        JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT
+    );
 
-                        if (navigator.sendBeacon) {
-                            navigator.sendBeacon(
-                                '" . admin_url('admin-ajax.php') . "?action=cdnjs_track_performance',
-                                JSON.stringify(data)
-                            );
-                        }
-                    }
-                });
-            });
-            observer.observe({ entryTypes: ['resource'] });
-        }
-    })();
-    ";
+    // The CDN resource has already completed when an "after" inline script
+    // runs, so read its buffered Resource Timing entry directly.
+    $monitoring_script = '(function(c){'
+        . 'if(!window.performance||!performance.getEntriesByType||!navigator.sendBeacon){return;}'
+        . 'var element=document.getElementById(c.elementId);'
+        . 'var resourceUrl=element&&element.src?element.src:c.url;'
+        . 'var entries=performance.getEntriesByType("resource");'
+        . 'var entry=null;'
+        . 'for(var i=entries.length-1;i>=0;i--){'
+        . 'if(entries[i].name===resourceUrl||entries[i].name.indexOf(c.url)===0){entry=entries[i];break;}'
+        . '}'
+        . 'if(!entry){return;}'
+        . 'navigator.sendBeacon(c.endpoint,JSON.stringify({script:c.script,duration:entry.duration}));'
+        . '}(' . $config . '));';
 
-    wp_add_inline_script($script, $monitoring_script, 'after');
+    wp_add_inline_script($script_handle, $monitoring_script, 'after');
 }
 
 /**
@@ -347,19 +385,28 @@ add_action('wp_ajax_nopriv_cdnjs_track_failure', 'cdnjs_handle_failure_tracking'
 add_action('wp_ajax_cdnjs_track_failure', 'cdnjs_handle_failure_tracking');
 
 function cdnjs_handle_failure_tracking() {
-    $script = isset($_GET['script']) ? sanitize_text_field($_GET['script']) : '';
+    if (!isset($_SERVER['REQUEST_METHOD']) || 'POST' !== $_SERVER['REQUEST_METHOD']) {
+        wp_die('', '', array('response' => 405));
+    }
 
-    if (empty($script)) {
-        wp_die();
+    $script = isset($_GET['script']) ? sanitize_text_field(wp_unslash($_GET['script'])) : '';
+
+    if (empty($script) || !cdnjs_is_configured_script($script)) {
+        wp_die('', '', array('response' => 400));
     }
 
     $failures = get_option('cdnjs_failures', array());
 
-    if (!isset($failures[$script])) {
+    if (!is_array($failures)) {
+        $failures = array();
+    }
+
+    if (!isset($failures[$script]) || !is_array($failures[$script])) {
         $failures[$script] = array('count' => 0, 'last_failure' => '');
     }
 
-    $failures[$script]['count']++;
+    $failure_count = isset($failures[$script]['count']) ? absint($failures[$script]['count']) : 0;
+    $failures[$script]['count'] = min(PHP_INT_MAX, $failure_count + 1);
     $failures[$script]['last_failure'] = current_time('mysql');
 
     update_option('cdnjs_failures', $failures);
@@ -374,28 +421,56 @@ add_action('wp_ajax_nopriv_cdnjs_track_performance', 'cdnjs_handle_performance_t
 add_action('wp_ajax_cdnjs_track_performance', 'cdnjs_handle_performance_tracking');
 
 function cdnjs_handle_performance_tracking() {
+    if (!isset($_SERVER['REQUEST_METHOD']) || 'POST' !== $_SERVER['REQUEST_METHOD']) {
+        wp_die('', '', array('response' => 405));
+    }
+
     $raw_data = file_get_contents('php://input');
     $data = json_decode($raw_data, true);
+    $script = isset($data['script']) ? sanitize_text_field($data['script']) : '';
+    $duration = isset($data['duration']) && is_numeric($data['duration']) ? (float) $data['duration'] : -1;
 
-    if (empty($data['script'])) {
-        wp_die();
+    if (empty($script) || !cdnjs_is_configured_script($script) || $duration < 0 || $duration > 600000) {
+        wp_die('', '', array('response' => 400));
     }
 
     $performance = get_option('cdnjs_performance', array());
 
-    if (!isset($performance[$data['script']])) {
-        $performance[$data['script']] = array(
+    if (!is_array($performance)) {
+        $performance = array();
+    }
+
+    if (!isset($performance[$script]) || !is_array($performance[$script])) {
+        $performance[$script] = array(
             'loads' => 0,
             'total_duration' => 0,
             'avg_duration' => 0
         );
     }
 
-    $performance[$data['script']]['loads']++;
-    $performance[$data['script']]['total_duration'] += floatval($data['duration']);
-    $performance[$data['script']]['avg_duration'] = $performance[$data['script']]['total_duration'] / $performance[$data['script']]['loads'];
+    $loads = isset($performance[$script]['loads']) ? absint($performance[$script]['loads']) : 0;
+    $total_duration = isset($performance[$script]['total_duration']) ? (float) $performance[$script]['total_duration'] : 0;
+
+    $performance[$script]['loads'] = min(PHP_INT_MAX, $loads + 1);
+    $performance[$script]['total_duration'] = max(0, $total_duration) + $duration;
+    $performance[$script]['avg_duration'] = $performance[$script]['total_duration'] / $performance[$script]['loads'];
 
     update_option('cdnjs_performance', $performance);
 
     wp_die();
+}
+
+/**
+ * Determine whether a telemetry event belongs to a configured script.
+ */
+function cdnjs_is_configured_script($script) {
+    $options = get_option('cdnjs_script_loader_settings', array());
+
+    if (empty($options['scripts']) || !is_array($options['scripts'])) {
+        return false;
+    }
+
+    $configured_scripts = array_map('sanitize_text_field', $options['scripts']);
+
+    return in_array($script, $configured_scripts, true);
 }
