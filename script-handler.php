@@ -93,7 +93,13 @@ function cdnjs_get_library_data($library, $version) {
             $sri_hashes = isset($data['sri']) && is_array($data['sri']) ? $data['sri'] : array();
             $sri_hash = isset($sri_hashes[$filename]) ? $sri_hashes[$filename] : '';
 
-            $library_data = cdnjs_build_library_data($library, $version, $filename, $sri_hash);
+            $library_data = cdnjs_build_library_data($library, $version, $filename);
+
+            // CDNJS metadata can occasionally contain a hash that does not
+            // match the bytes served by the CDN. Verify it once per cache
+            // refresh so browsers are not given an integrity value that will
+            // block an otherwise valid script.
+            $library_data['sri'] = cdnjs_verify_sri_hash($library_data['url'], $sri_hash);
 
             // Cache for 7 days.
             set_transient($transient_key, $library_data, 7 * DAY_IN_SECONDS);
@@ -108,6 +114,28 @@ function cdnjs_get_library_data($library, $version) {
     set_transient($transient_key, $library_data, HOUR_IN_SECONDS);
 
     return $library_data;
+}
+
+/**
+ * Verify a CDNJS integrity value against the selected asset's response body.
+ */
+function cdnjs_verify_sri_hash($url, $sri_hash) {
+    if (empty($sri_hash) || !preg_match('/^(sha(?:256|384|512))-([A-Za-z0-9+\/=]+)$/', $sri_hash, $matches)) {
+        return '';
+    }
+
+    $response = wp_remote_get($url, array('timeout' => 10));
+
+    if (is_wp_error($response) || 200 !== wp_remote_retrieve_response_code($response)) {
+        return '';
+    }
+
+    $algorithm = $matches[1];
+    $computed_hash = $algorithm . '-' . base64_encode(
+        hash($algorithm, wp_remote_retrieve_body($response), true)
+    );
+
+    return hash_equals($sri_hash, $computed_hash) ? $sri_hash : '';
 }
 
 /**
